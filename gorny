@@ -1,0 +1,60 @@
+var prefire = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+  .filterDate('2020-05-08', '2020-08-31')
+  .filterBounds(table)
+  .median()
+  .clip(table)
+Map.addLayer(prefire, {bands: ['B7', 'B5', 'B3'], min: 0, max: 0.5}, 'До пожара');
+
+var postfire = ee.ImageCollection("LANDSAT/LC08/C01/T1_TOA")
+  .filterDate('2021-08-29', '2021-09-30')
+  .filterBounds(table)
+  .sort('CLOUD_COVER', false)
+  .mosaic()
+  .clip(table);
+Map.addLayer(postfire, {bands: ['B7', 'B5', 'B3'], min: 0, max: 0.5}, 'После пожара');
+
+// FIRMS raster is used for validation
+var fires = ee.ImageCollection("FIRMS")
+  .filterBounds(table)
+  .filterDate('2021-05-01', '2021-09-30')
+  .mosaic()
+  .clip(table);
+Map.addLayer(fires);
+
+// Merging feature collections
+var newfc = forest.merge(bright_vegetation).merge(water).merge(burned_area);
+print(newfc);
+var bands = ['B7', 'B5', 'B3'];
+var training = postfire.select(bands).sampleRegions({
+  collection: newfc,
+  properties: ['landcover'],
+  scale: 30
+});
+print(training); 
+
+var label = 'landcover'
+
+// Train a Random Forest classifier
+var trained = ee.Classifier.smileRandomForest(10).train(training, label, bands);
+
+// Classify the image with the same bands used for training.
+var classified = postfire.select(bands).classify(trained);
+
+Map.addLayer(classified.clip(table),
+             {min: 1, max: 4, palette: ['red', 'blue', 'green', '126603']},
+             'classification');
+             
+// Get the area of class 'burned_area'
+var deforest = classified.eq(1).clip(table);
+Map.addLayer(deforest,
+ {min:0, max:1, palette: ['grey', 'red']},
+ 'Deforest 2021');
+ 
+var areaImage = deforest.multiply(ee.Image.pixelArea());
+var area = areaImage.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: table,
+  scale: 30,
+  maxPixels: 1e10
+  });
+print(area);
